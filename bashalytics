@@ -1,0 +1,136 @@
+#!/bin/bash
+set -euo pipefail
+IFS=$'\n\t'
+
+OPTIND=1
+TIMESLICE_TYPE='day'
+
+show_help() {
+    echo "NAME:"
+    echo "  $0 - Displays time based graphs from STDIN"
+    echo ""
+    echo "USAGE:"
+    echo "  $0 <(cat bashalytics_logs)"
+    echo ""
+    echo "GLOBAL OPTIONS:"
+    echo "  -t [TIMESLICE_TYPE]  How to slice up time (minute, hour or day)"
+    echo "  -h                   Get (this) help"
+}
+
+get_time_string_length() {
+    D=""
+    if [ "$1" == "day" ]; then
+        D=$(date -Idate)
+    else
+        D=$(date -I$1 | sed 's/+.*//')
+    fi
+    echo "${#D}"
+}
+
+get_times() {
+    TIMESLICE="$1"
+    MIN=$2
+    MAX=$3
+    CURRENT="$MAX"
+    I=1
+    while [[ "$CURRENT" > "$MIN" ]]; do
+        if [ "${TIMESLICE}" == "day" ]; then
+            CURRENT=$(date -Idate -d "$CURRENT -1 $TIMESLICE")
+        else
+            CURRENT=$(date -I$TIMESLICE -d "$CURRENT -1 $TIMESLICE")
+        fi
+        echo "$CURRENT" | sed 's/+.*//'
+    done
+}
+
+while getopts "ht:" opt; do
+    case "$opt" in
+        h)
+            show_help
+            exit 0
+            ;;
+        t)  TIMESLICE_TYPE="$OPTARG"
+            if [ "$TIMESLICE_TYPE" != "minute" ] && [ "$TIMESLICE_TYPE" != "hour" ] && [ "$TIMESLICE_TYPE" != "day" ]; then
+                show_help
+                exit 1
+            fi
+            ;;
+    esac
+done
+shift $(( OPTIND - 1 ))
+
+declare -A FOUND_STATS
+declare -A STATS
+
+EARLIEST_TIME=""
+NEWEST_TIME=""
+STAT_STRING_LENGTH=1
+TIME_STRING_LENGTH=$(get_time_string_length "$TIMESLICE_TYPE")
+while read LINE
+do
+    IFS=' ' read -ra TMP <<< "$LINE" 
+    if [ "${#TMP[@]}" -lt 4 ]; then
+        continue;
+    fi
+    COLOR="-"
+    if [ "${TMP[2]}" != "-" ]; then
+        COLOR="+"
+    fi
+    STAT="${TMP[1]}"
+    # add_stat "$STAT" "$COLOR"
+    TIME=${TMP[0]:0:$TIME_STRING_LENGTH}
+    if [[ "$EARLIEST_TIME" == "" ]] || [[ "$TIME" < "$EARLIEST_TIME" ]]; then
+        EARLIEST_TIME="$TIME"
+    fi
+    if [[ "$NEWEST_TIME" == "" ]] || [[ "$TIME" > "$EARLIEST_TIME" ]]; then
+        NEWEST_TIME="$TIME"
+    fi
+    K="$STAT $COLOR $TIME"
+    if [[ -z ${STATS[$K]+unset} ]]; then
+        STATS[$K]=0
+    fi
+    if [ "${#STAT}" -gt "$STAT_STRING_LENGTH" ]; then
+        STAT_STRING_LENGTH="${#STAT}"
+    fi
+    FOUND_STATS["$STAT"]=1
+    STATS[$K]=$(( "${STATS[$K]}" + "${TMP[3]}" ))
+done < "/dev/stdin"
+
+mapfile -t TIMES <<< $(get_times "$TIMESLICE_TYPE" "$EARLIEST_TIME" "$NEWEST_TIME")
+
+
+echo "Date Range: ${TIMES[-1]} - ${TIMES[0]}"
+for STAT in "${!FOUND_STATS[@]}"; do
+    MAX=0
+    for COLOR in + -; do
+        ADDED=0
+        S=""
+        for TIME in "${TIMES[@]}"; do
+            K="$STAT $COLOR $TIME"
+            if [[ "$TIME" > "$NEWEST_TIME" ]]; then
+                continue
+            fi
+            if [[ "$TIME" < "$EARLIEST_TIME" ]]; then
+                continue
+            fi
+            if [[ -z ${STATS[$K]+unset} ]]; then
+                S="$S n"
+            else
+                ADDED=1
+                S="$S ${STATS[$K]}"
+                if [ "${STATS[$K]}" -gt "$MAX" ]; then
+                    MAX="${STATS[$K]}"
+                fi
+            fi
+        done
+        if [ "$ADDED" -gt "0" ]; then
+            GRAPH=
+            printf -v OUT "%-${STAT_STRING_LENGTH}.${STAT_STRING_LENGTH}s" "$STAT"
+            if [[ "$COLOR" == "+" ]]; then
+                echo -e "$OUT($MAX) \e[32m$(echo "$S" | spark-null -0 -m 0 -n "$MAX")\e[39m"
+            else
+                echo -e "$OUT($MAX) \e[41;30m$(echo "$S" | spark-null -0 -i -m 0 -n "$MAX")\e[39;49m\n"
+            fi
+        fi
+    done
+done

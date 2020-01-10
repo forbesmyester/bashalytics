@@ -1,0 +1,35 @@
+#!/bin/bash
+set -euo pipefail
+IFS=$'\n\t'
+
+get_times() {
+    TIMESLICE="$1"
+    MIN=$2
+    MAX=$3
+    CURRENT="$MAX"
+    I=1
+    while [[ "$CURRENT" > "$MIN" ]]; do
+        if [ "${TIMESLICE}" == "day" ]; then
+            CURRENT=$(date -Idate -d "$CURRENT -1 $TIMESLICE")
+        else
+            CURRENT=$(date -I$TIMESLICE -d "$CURRENT -1 $TIMESLICE")
+        fi
+        echo "$CURRENT" | sed 's/+.*//'
+    done
+}
+
+mapfile -t TIMES <<< $(get_times "$1" "2019-12-19" "2019-12-20")
+
+MOD=2
+for T in "${TIMES[@]}"; do
+    for G in {1..5}; do
+        echo "${T} G$G + $(( $G % $MOD ))"
+        echo "${T}343 G$G x 4"
+        echo "${T}22 G$G - $(( $RANDOM % 5 ))"
+    done
+    for G in {1..5}; do
+        echo "${T}4 Gx$G + $(( $G % $MOD ))"
+        echo "${T}22 Gx$G - $(( $RANDOM % 5 ))"
+    done
+    MOD=$(( $MOD + 1 ))
+done
